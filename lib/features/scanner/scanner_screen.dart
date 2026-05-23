@@ -1,80 +1,88 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:math';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
+
+import 'result_screen.dart';
 
 // ═══════════════════════════════════════════════════════════════════════
-// Mock data — rigged results for each dummy leaf asset
+// Variety data — simulated ML classification results
 // ═══════════════════════════════════════════════════════════════════════
 
-class MockLeaf {
-  final String assetPath;
+class VarietyInfo {
   final String name;
-  final String confidence;
-  final String description;
+  final String recommendation;
   final Color thumbnailColor;
 
-  const MockLeaf({
-    required this.assetPath,
+  const VarietyInfo({
     required this.name,
-    required this.confidence,
-    required this.description,
+    required this.recommendation,
     required this.thumbnailColor,
   });
 }
 
-const List<MockLeaf> _kMockLeaves = [
-  MockLeaf(
-    assetPath: 'assets/images/dummy_leaves/arabica.jpg',
-    name: 'Arabica',
-    confidence: '86% confidence',
-    description:
-        'Lorem ipsum dolor sit amet consectetur. '
-        'Integer cursus nulla ullamcorper est dictum '
-        'risus elit dapibus.',
+const List<VarietyInfo> kVarieties = [
+  VarietyInfo(
+    name: 'Arabika',
+    recommendation:
+        'Rentan terhadap penyakit karat daun (Leaf Rust). '
+        'Pastikan naungan pohon pelindung cukup (sekitar 30-40%) '
+        'untuk menjaga kelembaban. Lakukan pemangkasan rutin pada '
+        'cabang yang tidak produktif untuk sirkulasi udara.',
     thumbnailColor: Color(0xFF2D5A27),
   ),
-  MockLeaf(
-    assetPath: 'assets/images/dummy_leaves/robusta.jpg',
+  VarietyInfo(
     name: 'Robusta',
-    confidence: '92% confidence',
-    description:
-        'Lorem ipsum dolor sit amet consectetur. '
-        'Integer cursus nulla ullamcorper est dictum '
-        'risus elit dapibus.',
+    recommendation:
+        'Membutuhkan asupan nutrisi yang lebih tinggi. Lakukan '
+        'pemupukan berimbang dengan rasio NPK yang tepat, terutama '
+        'menjelang masa pembungaan. Pangkas dahan vertikal untuk '
+        'memaksimalkan pertumbuhan cabang horizontal (produktif).',
     thumbnailColor: Color(0xFF3E7A35),
   ),
-  MockLeaf(
-    assetPath: 'assets/images/dummy_leaves/excelsa.jpg',
+  VarietyInfo(
     name: 'Excelsa',
-    confidence: '78% confidence',
-    description:
-        'Lorem ipsum dolor sit amet consectetur. '
-        'Integer cursus nulla ullamcorper est dictum '
-        'risus elit dapibus.',
+    recommendation:
+        'Tanaman ini cukup toleran terhadap kekeringan. Namun, '
+        'karena kanopinya bisa tumbuh sangat besar dan tinggi, '
+        'jarak tanam harus diperhatikan (idealnya 3x3 meter). '
+        'Lakukan pemangkasan tinggi (topping) agar mudah dipanen.',
     thumbnailColor: Color(0xFF4A8B3F),
   ),
-  MockLeaf(
-    assetPath: 'assets/images/dummy_leaves/liberika.jpg',
+  VarietyInfo(
     name: 'Liberika',
-    confidence: '81% confidence',
-    description:
-        'Lorem ipsum dolor sit amet consectetur. '
-        'Integer cursus nulla ullamcorper est dictum '
-        'risus elit dapibus.',
+    recommendation:
+        'Sangat adaptif di lahan gambut atau tanah kurang subur. '
+        'Jaga kebersihan gulma di sekitar piringan tanaman. '
+        'Perhatikan pemangkasan bentuk karena daun dan buahnya '
+        'berukuran lebih besar dari varietas lain.',
     thumbnailColor: Color(0xFF1E4D1A),
   ),
 ];
 
+/// Randomly pick a variety.
+VarietyInfo _randomVariety() {
+  final rng = Random();
+  return kVarieties[rng.nextInt(kVarieties.length)];
+}
+
+int _randomConfidence() {
+  final rng = Random();
+  return 75 + rng.nextInt(21); // 75–95
+}
+
 // ═══════════════════════════════════════════════════════════════════════
-// Scan state machine
+// Scan state machine (no more 'result' — we navigate to ResultScreen)
 // ═══════════════════════════════════════════════════════════════════════
 
-enum _ScanState { idle, scanning, scanned, result }
+enum _ScanState { idle, scanning, scanned }
 
 // ═══════════════════════════════════════════════════════════════════════
-// ScannerScreen — full-screen camera viewfinder with rigged demo flow
+// ScannerScreen — full-screen camera viewfinder with simulated ML flow
 // ═══════════════════════════════════════════════════════════════════════
 
 class ScannerScreen extends StatefulWidget {
@@ -85,7 +93,7 @@ class ScannerScreen extends StatefulWidget {
 }
 
 class _ScannerScreenState extends State<ScannerScreen>
-    with TickerProviderStateMixin {
+    with SingleTickerProviderStateMixin {
   // ── Camera ──────────────────────────────────────────────────────
   CameraController? _cameraController;
   bool _isCameraReady = false;
@@ -93,15 +101,18 @@ class _ScannerScreenState extends State<ScannerScreen>
 
   // ── Scan state ──────────────────────────────────────────────────
   _ScanState _scanState = _ScanState.idle;
-  MockLeaf? _selectedLeaf;
+  VarietyInfo? _classifiedVariety;
+  int _confidence = 0;
+  File? _capturedImage;
 
   // ── Animations ──────────────────────────────────────────────────
   late final AnimationController _pillController;
-  late final AnimationController _resultController;
-  late final Animation<Offset> _resultSlide;
 
   // ── Timers ──────────────────────────────────────────────────────
   Timer? _stateTimer;
+
+  // ── Gallery ─────────────────────────────────────────────────────
+  final ImagePicker _imagePicker = ImagePicker();
 
   // ═════════════════════════════════════════════════════════════════
   // Lifecycle
@@ -115,18 +126,6 @@ class _ScannerScreenState extends State<ScannerScreen>
       vsync: this,
       duration: const Duration(milliseconds: 350),
     );
-
-    _resultController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 450),
-    );
-    _resultSlide = Tween<Offset>(
-      begin: const Offset(0, 1),
-      end: Offset.zero,
-    ).animate(CurvedAnimation(
-      parent: _resultController,
-      curve: Curves.easeOutCubic,
-    ));
 
     _initCamera();
   }
@@ -156,7 +155,6 @@ class _ScannerScreenState extends State<ScannerScreen>
     _stateTimer?.cancel();
     _cameraController?.dispose();
     _pillController.dispose();
-    _resultController.dispose();
     super.dispose();
   }
 
@@ -173,44 +171,82 @@ class _ScannerScreenState extends State<ScannerScreen>
     } catch (_) {}
   }
 
-  /// Opens the rigged mock-gallery bottom sheet.
-  void _openMockGallery() {
+  /// Opens the device's real photo gallery via image_picker.
+  Future<void> _openGallery() async {
     if (_scanState != _ScanState.idle) return;
 
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      barrierColor: Colors.black54,
-      builder: (_) => _MockGallerySheet(
-        onLeafSelected: _onLeafSelected,
-      ),
-    );
+    try {
+      final XFile? picked = await _imagePicker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 85,
+      );
+      if (picked == null || !mounted) return;
+
+      _capturedImage = File(picked.path);
+      _startClassification();
+    } catch (e) {
+      debugPrint('Gallery pick error: $e');
+    }
+  }
+  /// Captures a photo from the live camera and starts classification.
+  Future<void> _captureAndClassify() async {
+    if (_scanState != _ScanState.idle) return;
+    if (_cameraController == null || !_isCameraReady) return;
+    try {
+      final XFile photo = await _cameraController!.takePicture();
+      if (!mounted) return;
+      _capturedImage = File(photo.path);
+      _startClassification();
+    } catch (e) {
+      debugPrint('Capture error: $e');
+    }
   }
 
-  /// Triggered when a leaf is picked from the mock gallery.
-  void _onLeafSelected(MockLeaf leaf) {
-    Navigator.of(context).pop(); // dismiss gallery sheet
+  /// Runs the simulated ML classification pipeline:
+  ///  scanning (2 s) → scanned (1 s) → navigate to ResultScreen
+  void _startClassification() {
+    _classifiedVariety = _randomVariety();
+    _confidence = _randomConfidence();
 
-    setState(() {
-      _selectedLeaf = leaf;
-      _scanState = _ScanState.scanning;
-    });
+    setState(() => _scanState = _ScanState.scanning);
     _pillController.forward(from: 0);
 
-    // State 1 → scanning for 2 s
+    // Phase 1 — "scanning" for 2 seconds
     _stateTimer = Timer(const Duration(seconds: 2), () {
       if (!mounted) return;
 
-      // State 2 → scanned for 1 s
+      // Phase 2 — "scanned" for 1 second
       setState(() => _scanState = _ScanState.scanned);
 
       _stateTimer = Timer(const Duration(seconds: 1), () {
         if (!mounted) return;
         _pillController.reverse();
 
-        // State 3 → result
-        setState(() => _scanState = _ScanState.result);
-        _resultController.forward(from: 0);
+        // Capture references before resetting
+        final image = _capturedImage!;
+        final variety = _classifiedVariety!;
+        final confidence = _confidence;
+
+        // Reset scanner to idle so live camera resumes when user returns
+        setState(() {
+          _scanState = _ScanState.idle;
+          _capturedImage = null;
+          _classifiedVariety = null;
+          _confidence = 0;
+        });
+
+        // Navigate to the dedicated result screen
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => ResultScreen(
+              imageFile: image,
+              varietyName: variety.name,
+              careRecommendation: variety.recommendation,
+              confidence: confidence,
+              varietyColor: variety.thumbnailColor,
+            ),
+          ),
+        );
       });
     });
   }
@@ -219,12 +255,12 @@ class _ScannerScreenState extends State<ScannerScreen>
   void _resetScan() {
     _stateTimer?.cancel();
     _pillController.reverse();
-    _resultController.reverse().then((_) {
-      if (!mounted) return;
-      setState(() {
-        _scanState = _ScanState.idle;
-        _selectedLeaf = null;
-      });
+    if (!mounted) return;
+    setState(() {
+      _scanState = _ScanState.idle;
+      _classifiedVariety = null;
+      _capturedImage = null;
+      _confidence = 0;
     });
   }
 
@@ -246,7 +282,7 @@ class _ScannerScreenState extends State<ScannerScreen>
           body: Stack(
             fit: StackFit.expand,
             children: [
-              // Layer 0 — Camera preview
+              // Layer 0 — Camera preview (or captured image)
               _buildCameraPreview(),
 
               // Layer 1 — Top overlay (gradient + back + title)
@@ -259,9 +295,6 @@ class _ScannerScreenState extends State<ScannerScreen>
               if (_scanState == _ScanState.scanning ||
                   _scanState == _ScanState.scanned)
                 _buildScanPill(),
-
-              // Layer 4 — Result bottom sheet
-              if (_selectedLeaf != null) _buildResultSheet(),
             ],
           ),
         ),
@@ -271,6 +304,16 @@ class _ScannerScreenState extends State<ScannerScreen>
 
   // ─── Camera preview ─────────────────────────────────────────────
   Widget _buildCameraPreview() {
+    // Show captured image during scanning states
+    if (_capturedImage != null && _scanState != _ScanState.idle) {
+      return SizedBox.expand(
+        child: Image.file(
+          _capturedImage!,
+          fit: BoxFit.cover,
+        ),
+      );
+    }
+
     if (!_isCameraReady || _cameraController == null) {
       return Container(
         color: const Color(0xFF111111),
@@ -296,7 +339,6 @@ class _ScannerScreenState extends State<ScannerScreen>
       );
     }
 
-    // Fill the entire screen with the camera, cropping as needed.
     return SizedBox.expand(
       child: FittedBox(
         fit: BoxFit.cover,
@@ -401,7 +443,7 @@ class _ScannerScreenState extends State<ScannerScreen>
     );
   }
 
-  // ─── Bottom controls ────────────────────────────────────────────
+  // ─── Bottom controls ─────────
   Widget _buildBottomControls() {
     final bottomInset = MediaQuery.of(context).padding.bottom;
 
@@ -409,11 +451,11 @@ class _ScannerScreenState extends State<ScannerScreen>
       bottom: 0,
       left: 0,
       right: 0,
-      child: IgnorePointer(
-        ignoring: _scanState == _ScanState.result,
-        child: AnimatedOpacity(
-          opacity: _scanState == _ScanState.result ? 0.0 : 1.0,
-          duration: const Duration(milliseconds: 300),
+      child: AnimatedOpacity(
+        opacity: _scanState != _ScanState.idle ? 0.0 : 1.0,
+        duration: const Duration(milliseconds: 300),
+        child: IgnorePointer(
+          ignoring: _scanState != _ScanState.idle,
           child: Container(
             padding: EdgeInsets.only(
               bottom: bottomInset + 20,
@@ -438,7 +480,12 @@ class _ScannerScreenState extends State<ScannerScreen>
                 // Gallery button (bottom-left)
                 _OverlayCircleButton(
                   icon: Icons.photo_library_outlined,
-                  onTap: _openMockGallery,
+                  onTap: _openGallery,
+                ),
+                // Shutter button (center)
+                _ShutterButton(
+                  onTap: _captureAndClassify,
+                  isProcessing: _scanState != _ScanState.idle,
                 ),
                 // Flash toggle (bottom-right)
                 _OverlayCircleButton(
@@ -460,20 +507,21 @@ class _ScannerScreenState extends State<ScannerScreen>
     final bottomInset = MediaQuery.of(context).padding.bottom;
     final bool isScanning = _scanState == _ScanState.scanning;
 
-    // ── Pill theme ───
     final Color pillBg = isScanning
-        ? const Color(0xFF2C2C2E)       // dark charcoal
-        : const Color(0xFF22A45D);       // green
+        ? const Color(0xFF2C2C2E)
+        : const Color(0xFF22A45D);
     final Color iconBg = isScanning
-        ? const Color(0xFF3B82F6)        // blue
-        : const Color(0xFF16A34A);       // green
+        ? const Color(0xFF3B82F6)
+        : const Color(0xFF16A34A);
     final IconData iconData = isScanning
         ? Icons.search_rounded
         : Icons.eco_rounded;
-    final String title = isScanning ? 'Mendeteksi Daun' : 'Daun Terfoto';
+    final String title = isScanning
+        ? 'Menganalisis daun...'
+        : 'Daun Teridentifikasi';
     final String subtitle = isScanning
-        ? 'Harap stabilkan kamera'
-        : 'Foto daun telah diambil';
+        ? 'Sedang memproses klasifikasi'
+        : 'Hasil klasifikasi siap';
 
     return Positioned(
       bottom: bottomInset + 26,
@@ -502,10 +550,17 @@ class _ScannerScreenState extends State<ScannerScreen>
                     color: iconBg,
                     shape: BoxShape.circle,
                   ),
-                  child: Icon(iconData, color: Colors.white, size: 20),
+                  child: isScanning
+                      ? const Padding(
+                          padding: EdgeInsets.all(10),
+                          child: CircularProgressIndicator(
+                            color: Colors.white,
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : Icon(iconData, color: Colors.white, size: 20),
                 ),
                 const SizedBox(width: 10),
-                // Two-line text
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
@@ -533,64 +588,6 @@ class _ScannerScreenState extends State<ScannerScreen>
                 ),
               ],
             ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ─── Result bottom sheet ────────────────────────────────────────
-  Widget _buildResultSheet() {
-    return Positioned(
-      bottom: 0,
-      left: 0,
-      right: 0,
-      child: SlideTransition(
-        position: _resultSlide,
-        child: Container(
-          padding: const EdgeInsets.fromLTRB(24, 28, 24, 44),
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Leaf name
-              Text(
-                _selectedLeaf!.name,
-                style: const TextStyle(
-                  fontSize: 26,
-                  fontWeight: FontWeight.w800,
-                  color: Color(0xFF1C1C1E),
-                  letterSpacing: -0.5,
-                  height: 1.2,
-                ),
-              ),
-              const SizedBox(height: 4),
-              // Confidence
-              Text(
-                _selectedLeaf!.confidence,
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  color: Color(0xFF8E8E93),
-                  height: 1.3,
-                ),
-              ),
-              const SizedBox(height: 16),
-              // Description
-              Text(
-                _selectedLeaf!.description,
-                style: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w400,
-                  color: Color(0xFF3A3A3C),
-                  height: 1.55,
-                ),
-              ),
-            ],
           ),
         ),
       ),
@@ -632,108 +629,31 @@ class _OverlayCircleButton extends StatelessWidget {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// _MockGallerySheet — custom bottom sheet listing the 4 rigged leaves
-// ═══════════════════════════════════════════════════════════════════════
-
-class _MockGallerySheet extends StatelessWidget {
-  const _MockGallerySheet({required this.onLeafSelected});
-
-  final ValueChanged<MockLeaf> onLeafSelected;
-
-  @override
-  Widget build(BuildContext context) {
-    final bottomInset = MediaQuery.of(context).padding.bottom;
-
-    return Container(
-      padding: EdgeInsets.fromLTRB(20, 12, 20, 20 + bottomInset),
-      decoration: const BoxDecoration(
-        color: Color(0xFF1C1C1E),
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Drag handle
-          Container(
-            width: 40,
-            height: 4,
-            decoration: BoxDecoration(
-              color: Colors.white24,
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          const SizedBox(height: 20),
-          const Text(
-            'Pilih Daun (Demo)',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 16),
-          // 2×2 grid of mock leaves
-          GridView.count(
-            crossAxisCount: 2,
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            mainAxisSpacing: 12,
-            crossAxisSpacing: 12,
-            childAspectRatio: 1.5,
-            children: _kMockLeaves
-                .map((leaf) => _MockLeafTile(
-                      leaf: leaf,
-                      onTap: () => onLeafSelected(leaf),
-                    ))
-                .toList(),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// _MockLeafTile — individual tile in the mock gallery grid
-// ═══════════════════════════════════════════════════════════════════════
-
-class _MockLeafTile extends StatelessWidget {
-  const _MockLeafTile({required this.leaf, required this.onTap});
-
-  final MockLeaf leaf;
+class _ShutterButton extends StatelessWidget {
+  const _ShutterButton({required this.onTap, required this.isProcessing});
   final VoidCallback onTap;
-
+  final bool isProcessing;
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        decoration: BoxDecoration(
-          color: leaf.thumbnailColor,
-          borderRadius: BorderRadius.circular(14),
-          boxShadow: [
-            BoxShadow(
-              color: leaf.thumbnailColor.withValues(alpha: 0.4),
-              blurRadius: 8,
-              offset: const Offset(0, 3),
+      onTap: isProcessing ? null : onTap,
+      child: AnimatedOpacity(
+        opacity: isProcessing ? 0.4 : 1.0,
+        duration: const Duration(milliseconds: 200),
+        child: Container(
+          width: 72,
+          height: 72,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white, width: 4),
+          ),
+          padding: const EdgeInsets.all(4),
+          child: Container(
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              shape: BoxShape.circle,
             ),
-          ],
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.eco_rounded, color: Colors.white70, size: 32),
-            const SizedBox(height: 6),
-            Text(
-              leaf.name,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );

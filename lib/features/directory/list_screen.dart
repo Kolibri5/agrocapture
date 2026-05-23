@@ -265,8 +265,7 @@ class _FarmCard extends StatelessWidget {
                             .map((v) => Padding(
                                   padding: const EdgeInsets.only(right: 4),
                                   child: _ChipTag(v),
-                                ))
-                            .toList(),
+                                )),
                       ],
                     ),
                   ],

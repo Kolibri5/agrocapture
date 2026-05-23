@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 
@@ -15,7 +14,6 @@ import '../directory/detail_screen.dart';
 
 const Color _kPrimary = Color(0xFF1B6E3C);
 const Color _kTextPrimary = Color(0xFF0A0F14);
-const Color _kTextSecondary = Color(0xFF6B7680);
 const double _kNavBarHeight = 68;
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -291,7 +289,6 @@ class _MapScreenState extends State<MapScreen> {
       _mapCompleter.complete(controller);
     }
     _mapController = controller;
-    controller.setMapStyle(_kMapStyle);
   }
 
   void _onMarkerTapped(Farm farm) {
@@ -349,10 +346,11 @@ class _MapScreenState extends State<MapScreen> {
             target: _userLocation,
             zoom: 14,
           ),
+          style: _kMapStyle,
           minMaxZoomPreference: const MinMaxZoomPreference(11.0, null),
           markers: _markers,
           myLocationEnabled: true,
-          myLocationButtonEnabled: true,
+          myLocationButtonEnabled: false,
           zoomControlsEnabled: false,
           mapToolbarEnabled: false,
           compassEnabled: false,
